@@ -307,14 +307,55 @@ router.post('/adsgram-reward', async (req, res) => {
   } finally { client.release() }
 })
 
-// GET /api/ads/adsgram-info — всё инфо для страницы рекламы
+// POST /api/ads/monetag-reward — начислить награду за Monetag рекламу
+router.post('/monetag-reward', async (req, res) => {
+  const client = await pool.connect()
+  try {
+    const tgId = req.telegramUser.id
+    const { rows: [user] } = await client.query('SELECT * FROM users WHERE telegram_id=$1', [tgId])
+    if (!user) return res.status(404).json({ error: 'User not found' })
+
+    // Get settings
+    const { rows: settings } = await client.query(
+      "SELECT key,value FROM settings WHERE key IN ('monetag_reward','monetag_daily_limit')"
+    )
+    const s = {}
+    settings.forEach(r => s[r.key] = r.value)
+    const reward = parseFloat(s.monetag_reward) || 0.0001
+    const dailyLimit = parseInt(s.monetag_daily_limit) || 10
+
+    // Check daily limit
+    const { rows: [{ count }] } = await client.query(
+      "SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='monetag_reward' AND created_at > NOW() - INTERVAL '24 hours'",
+      [user.id]
+    )
+    if (parseInt(count) >= dailyLimit) {
+      return res.status(400).json({ error: `Лимит ${dailyLimit} просмотров Monetag в день исчерпан` })
+    }
+
+    await client.query('BEGIN')
+    await client.query('UPDATE users SET balance_ton=balance_ton+$1 WHERE id=$2', [reward, user.id])
+    await client.query(
+      "INSERT INTO transactions (user_id,type,amount,label) VALUES ($1,'monetag_reward',$2,'📺 Monetag реклама')",
+      [user.id, reward]
+    )
+    await client.query('COMMIT')
+
+    res.json({ ok: true, reward })
+  } catch (e) {
+    try { await client.query('ROLLBACK') } catch { }
+    res.status(500).json({ error: e.message })
+  } finally { client.release() }
+})
+
+// GET /api/ads/adsgram-info — всё инфо для страницы рекламы (Adsgram + Monetag)
 router.get('/adsgram-info', async (req, res) => {
   try {
     const tgId = req.telegramUser?.id
 
     // Get settings
     const { rows: settings } = await pool.query(
-      "SELECT key,value FROM settings WHERE key IN ('adsgram_block_id','adsgram_reward','adsgram_daily_limit')"
+      "SELECT key,value FROM settings WHERE key IN ('adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_zone_id','monetag_reward','monetag_daily_limit')"
     )
     const s = {}
     settings.forEach(r => s[r.key] = r.value)
@@ -322,12 +363,20 @@ router.get('/adsgram-info', async (req, res) => {
     const reward = parseFloat(s.adsgram_reward) || 0.0001
     const dailyLimit = parseInt(s.adsgram_daily_limit) || 10
 
+    // Monetag
+    const monetagZoneId = s.monetag_zone_id || ''
+    const monetagReward = parseFloat(s.monetag_reward) || 0.0001
+    const monetagDailyLimit = parseInt(s.monetag_daily_limit) || 10
+
     let todayCount = 0
     let totalEarned = 0
+    let monetagTodayCount = 0
+    let monetagTotalEarned = 0
 
     if (tgId) {
       const { rows: [user] } = await pool.query('SELECT id FROM users WHERE telegram_id=$1', [tgId])
       if (user) {
+        // Adsgram stats
         const { rows: [{ count }] } = await pool.query(
           "SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='ad_reward' AND created_at > NOW() - INTERVAL '24 hours'",
           [user.id]
@@ -339,10 +388,26 @@ router.get('/adsgram-info', async (req, res) => {
           [user.id]
         )
         totalEarned = parseFloat(total)
+
+        // Monetag stats
+        const { rows: [{ count: mCount }] } = await pool.query(
+          "SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='monetag_reward' AND created_at > NOW() - INTERVAL '24 hours'",
+          [user.id]
+        )
+        monetagTodayCount = parseInt(mCount)
+
+        const { rows: [{ total: mTotal }] } = await pool.query(
+          "SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE user_id=$1 AND type='monetag_reward'",
+          [user.id]
+        )
+        monetagTotalEarned = parseFloat(mTotal)
       }
     }
 
-    res.json({ blockId, reward, dailyLimit, todayCount, totalEarned })
+    res.json({
+      blockId, reward, dailyLimit, todayCount, totalEarned,
+      monetagZoneId, monetagReward, monetagDailyLimit, monetagTodayCount, monetagTotalEarned
+    })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 

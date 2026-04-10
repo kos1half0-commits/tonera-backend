@@ -427,6 +427,11 @@ export async function runMigrations() {
   await pool.query("INSERT INTO settings (key,value) VALUES ('adsgram_reward','0.001') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('adsgram_daily_limit','10') ON CONFLICT (key) DO NOTHING")
 
+  // === Monetag Ads ===
+  await pool.query("INSERT INTO settings (key,value) VALUES ('monetag_zone_id','') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('monetag_reward','0.001') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('monetag_daily_limit','10') ON CONFLICT (key) DO NOTHING")
+
   // === Referral Auction ===
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ref_auctions (
