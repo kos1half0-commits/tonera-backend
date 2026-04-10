@@ -473,5 +473,75 @@ router.get('/adsgram-info', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-export default router
+// GET /api/ads/admin-stats — статистика всех рекламных сетей для админки
+router.get('/admin-stats', async (req, res) => {
+  try {
+    const networks = [
+      { key: 'adsgram', type: 'ad_reward', label: 'Adsgram', icon: '🎬' },
+      { key: 'monetag', type: 'monetag_reward', label: 'Monetag', icon: '📺' },
+      { key: 'onclicka', type: 'onclicka_reward', label: 'OnClickA', icon: '🔵' },
+      { key: 'richads', type: 'richads_reward', label: 'RichAds', icon: '💚' },
+      { key: 'tads', type: 'tads_reward', label: 'Tads', icon: '🟠' },
+    ]
 
+    const stats = []
+    let totalAll = 0, todayAll = 0, earnedAll = 0, usersAll = new Set()
+
+    for (const net of networks) {
+      // Total views
+      const { rows: [{ count: total }] } = await pool.query(
+        `SELECT COUNT(*) as count FROM transactions WHERE type=$1`, [net.type]
+      )
+      // Today views
+      const { rows: [{ count: today }] } = await pool.query(
+        `SELECT COUNT(*) as count FROM transactions WHERE type=$1 AND created_at > NOW() - INTERVAL '24 hours'`, [net.type]
+      )
+      // Total earned
+      const { rows: [{ sum: earned }] } = await pool.query(
+        `SELECT COALESCE(SUM(amount),0) as sum FROM transactions WHERE type=$1`, [net.type]
+      )
+      // Unique users
+      const { rows: [{ count: users }] } = await pool.query(
+        `SELECT COUNT(DISTINCT user_id) as count FROM transactions WHERE type=$1`, [net.type]
+      )
+      // Yesterday views
+      const { rows: [{ count: yesterday }] } = await pool.query(
+        `SELECT COUNT(*) as count FROM transactions WHERE type=$1 AND created_at > NOW() - INTERVAL '48 hours' AND created_at <= NOW() - INTERVAL '24 hours'`, [net.type]
+      )
+      // Last 7 days
+      const { rows: [{ count: week }] } = await pool.query(
+        `SELECT COUNT(*) as count FROM transactions WHERE type=$1 AND created_at > NOW() - INTERVAL '7 days'`, [net.type]
+      )
+
+      const totalInt = parseInt(total)
+      const todayInt = parseInt(today)
+      const earnedFloat = parseFloat(earned)
+
+      totalAll += totalInt
+      todayAll += todayInt
+      earnedAll += earnedFloat
+
+      stats.push({
+        ...net,
+        total: totalInt,
+        today: todayInt,
+        yesterday: parseInt(yesterday),
+        week: parseInt(week),
+        earned: earnedFloat,
+        users: parseInt(users),
+      })
+    }
+
+    // Top users
+    const { rows: topUsers } = await pool.query(`
+      SELECT u.telegram_id, u.username, u.first_name, COUNT(*) as views, COALESCE(SUM(t.amount),0) as earned
+      FROM transactions t JOIN users u ON u.id = t.user_id
+      WHERE t.type IN ('ad_reward','monetag_reward','onclicka_reward','richads_reward','tads_reward')
+      GROUP BY u.id ORDER BY earned DESC LIMIT 10
+    `)
+
+    res.json({ stats, totalAll, todayAll, earnedAll, topUsers })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+export default router
