@@ -440,6 +440,18 @@ export async function runMigrations() {
   await pool.query("INSERT INTO settings (key,value) VALUES ('onclicka_reward','0.001') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('onclicka_daily_limit','10') ON CONFLICT (key) DO NOTHING")
 
+  // === RichAds ===
+  await pool.query("INSERT INTO settings (key,value) VALUES ('richads_enabled','1') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('richads_widget_id','') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('richads_reward','0.001') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('richads_daily_limit','10') ON CONFLICT (key) DO NOTHING")
+
+  // === Tads.me ===
+  await pool.query("INSERT INTO settings (key,value) VALUES ('tads_enabled','1') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('tads_widget_id','') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('tads_reward','0.001') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('tads_daily_limit','10') ON CONFLICT (key) DO NOTHING")
+
   // === Referral Auction ===
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ref_auctions (

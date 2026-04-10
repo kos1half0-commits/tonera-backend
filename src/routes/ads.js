@@ -387,90 +387,89 @@ router.post('/onclicka-reward', async (req, res) => {
   } finally { client.release() }
 })
 
-// GET /api/ads/adsgram-info — всё инфо для страницы рекламы (Adsgram + Monetag + OnClickA)
+// POST /api/ads/richads-reward
+router.post('/richads-reward', async (req, res) => {
+  const client = await pool.connect()
+  try {
+    const tgId = req.telegramUser.id
+    const { rows: [user] } = await client.query('SELECT * FROM users WHERE telegram_id=$1', [tgId])
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    const { rows: settings } = await client.query("SELECT key,value FROM settings WHERE key IN ('richads_reward','richads_daily_limit')")
+    const s = {}; settings.forEach(r => s[r.key] = r.value)
+    const reward = parseFloat(s.richads_reward) || 0.0001
+    const dailyLimit = parseInt(s.richads_daily_limit) || 10
+    const { rows: [{ count }] } = await client.query("SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='richads_reward' AND created_at > NOW() - INTERVAL '24 hours'", [user.id])
+    if (parseInt(count) >= dailyLimit) return res.status(400).json({ error: `Лимит ${dailyLimit} просмотров RichAds в день исчерпан` })
+    await client.query('BEGIN')
+    await client.query('UPDATE users SET balance_ton=balance_ton+$1 WHERE id=$2', [reward, user.id])
+    await client.query("INSERT INTO transactions (user_id,type,amount,label) VALUES ($1,'richads_reward',$2,'💚 RichAds реклама')", [user.id, reward])
+    await client.query('COMMIT')
+    res.json({ ok: true, reward })
+  } catch (e) { try { await client.query('ROLLBACK') } catch { }; res.status(500).json({ error: e.message }) } finally { client.release() }
+})
+
+// POST /api/ads/tads-reward
+router.post('/tads-reward', async (req, res) => {
+  const client = await pool.connect()
+  try {
+    const tgId = req.telegramUser.id
+    const { rows: [user] } = await client.query('SELECT * FROM users WHERE telegram_id=$1', [tgId])
+    if (!user) return res.status(404).json({ error: 'User not found' })
+    const { rows: settings } = await client.query("SELECT key,value FROM settings WHERE key IN ('tads_reward','tads_daily_limit')")
+    const s = {}; settings.forEach(r => s[r.key] = r.value)
+    const reward = parseFloat(s.tads_reward) || 0.0001
+    const dailyLimit = parseInt(s.tads_daily_limit) || 10
+    const { rows: [{ count }] } = await client.query("SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='tads_reward' AND created_at > NOW() - INTERVAL '24 hours'", [user.id])
+    if (parseInt(count) >= dailyLimit) return res.status(400).json({ error: `Лимит ${dailyLimit} просмотров Tads в день исчерпан` })
+    await client.query('BEGIN')
+    await client.query('UPDATE users SET balance_ton=balance_ton+$1 WHERE id=$2', [reward, user.id])
+    await client.query("INSERT INTO transactions (user_id,type,amount,label) VALUES ($1,'tads_reward',$2,'🟠 Tads реклама')", [user.id, reward])
+    await client.query('COMMIT')
+    res.json({ ok: true, reward })
+  } catch (e) { try { await client.query('ROLLBACK') } catch { }; res.status(500).json({ error: e.message }) } finally { client.release() }
+})
+
+// GET /api/ads/adsgram-info — всё инфо для страницы рекламы (все 5 сетей)
 router.get('/adsgram-info', async (req, res) => {
   try {
     const tgId = req.telegramUser?.id
-
-    // Get settings
     const { rows: settings } = await pool.query(
-      "SELECT key,value FROM settings WHERE key IN ('adsgram_enabled','adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_enabled','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_enabled','onclicka_spot_id','onclicka_reward','onclicka_daily_limit')"
+      "SELECT key,value FROM settings WHERE key IN ('adsgram_enabled','adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_enabled','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_enabled','onclicka_spot_id','onclicka_reward','onclicka_daily_limit','richads_enabled','richads_widget_id','richads_reward','richads_daily_limit','tads_enabled','tads_widget_id','tads_reward','tads_daily_limit')"
     )
-    const s = {}
-    settings.forEach(r => s[r.key] = r.value)
-    const blockId = s.adsgram_block_id || ''
-    const reward = parseFloat(s.adsgram_reward) || 0.0001
-    const dailyLimit = parseInt(s.adsgram_daily_limit) || 10
-    const adsgramEnabled = s.adsgram_enabled !== '0'
+    const s = {}; settings.forEach(r => s[r.key] = r.value)
 
-    // Monetag
-    const monetagZoneId = s.monetag_zone_id || ''
-    const monetagReward = parseFloat(s.monetag_reward) || 0.0001
-    const monetagDailyLimit = parseInt(s.monetag_daily_limit) || 10
-    const monetagEnabled = s.monetag_enabled !== '0'
-
-    // OnClickA
-    const onclickaSpotId = s.onclicka_spot_id || ''
-    const onclickaReward = parseFloat(s.onclicka_reward) || 0.0001
-    const onclickaDailyLimit = parseInt(s.onclicka_daily_limit) || 10
-    const onclickaEnabled = s.onclicka_enabled !== '0'
-
-    let todayCount = 0
-    let totalEarned = 0
-    let monetagTodayCount = 0
-    let monetagTotalEarned = 0
-    let onclickaTodayCount = 0
-    let onclickaTotalEarned = 0
+    const data = {
+      adsgramEnabled: s.adsgram_enabled !== '0', blockId: s.adsgram_block_id || '', reward: parseFloat(s.adsgram_reward) || 0.0001, dailyLimit: parseInt(s.adsgram_daily_limit) || 10, todayCount: 0, totalEarned: 0,
+      monetagEnabled: s.monetag_enabled !== '0', monetagZoneId: s.monetag_zone_id || '', monetagReward: parseFloat(s.monetag_reward) || 0.0001, monetagDailyLimit: parseInt(s.monetag_daily_limit) || 10, monetagTodayCount: 0, monetagTotalEarned: 0,
+      onclickaEnabled: s.onclicka_enabled !== '0', onclickaSpotId: s.onclicka_spot_id || '', onclickaReward: parseFloat(s.onclicka_reward) || 0.0001, onclickaDailyLimit: parseInt(s.onclicka_daily_limit) || 10, onclickaTodayCount: 0, onclickaTotalEarned: 0,
+      richadsEnabled: s.richads_enabled !== '0', richadsWidgetId: s.richads_widget_id || '', richadsReward: parseFloat(s.richads_reward) || 0.0001, richadsDailyLimit: parseInt(s.richads_daily_limit) || 10, richadsTodayCount: 0, richadsTotalEarned: 0,
+      tadsEnabled: s.tads_enabled !== '0', tadsWidgetId: s.tads_widget_id || '', tadsReward: parseFloat(s.tads_reward) || 0.0001, tadsDailyLimit: parseInt(s.tads_daily_limit) || 10, tadsTodayCount: 0, tadsTotalEarned: 0,
+    }
 
     if (tgId) {
       const { rows: [user] } = await pool.query('SELECT id FROM users WHERE telegram_id=$1', [tgId])
       if (user) {
-        // Adsgram stats
-        const { rows: [{ count }] } = await pool.query(
-          "SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='ad_reward' AND created_at > NOW() - INTERVAL '24 hours'",
-          [user.id]
-        )
-        todayCount = parseInt(count)
-
-        const { rows: [{ total }] } = await pool.query(
-          "SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE user_id=$1 AND type='ad_reward'",
-          [user.id]
-        )
-        totalEarned = parseFloat(total)
-
-        // Monetag stats
-        const { rows: [{ count: mCount }] } = await pool.query(
-          "SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='monetag_reward' AND created_at > NOW() - INTERVAL '24 hours'",
-          [user.id]
-        )
-        monetagTodayCount = parseInt(mCount)
-
-        const { rows: [{ total: mTotal }] } = await pool.query(
-          "SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE user_id=$1 AND type='monetag_reward'",
-          [user.id]
-        )
-        monetagTotalEarned = parseFloat(mTotal)
-
-        // OnClickA stats
-        const { rows: [{ count: oCount }] } = await pool.query(
-          "SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type='onclicka_reward' AND created_at > NOW() - INTERVAL '24 hours'",
-          [user.id]
-        )
-        onclickaTodayCount = parseInt(oCount)
-
-        const { rows: [{ total: oTotal }] } = await pool.query(
-          "SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE user_id=$1 AND type='onclicka_reward'",
-          [user.id]
-        )
-        onclickaTotalEarned = parseFloat(oTotal)
+        const types = [
+          ['ad_reward', 'todayCount', 'totalEarned'],
+          ['monetag_reward', 'monetagTodayCount', 'monetagTotalEarned'],
+          ['onclicka_reward', 'onclickaTodayCount', 'onclickaTotalEarned'],
+          ['richads_reward', 'richadsTodayCount', 'richadsTotalEarned'],
+          ['tads_reward', 'tadsTodayCount', 'tadsTotalEarned'],
+        ]
+        for (const [type, countKey, totalKey] of types) {
+          const { rows: [{ count }] } = await pool.query(
+            `SELECT COUNT(*) as count FROM transactions WHERE user_id=$1 AND type=$2 AND created_at > NOW() - INTERVAL '24 hours'`, [user.id, type]
+          )
+          data[countKey] = parseInt(count)
+          const { rows: [{ total }] } = await pool.query(
+            `SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE user_id=$1 AND type=$2`, [user.id, type]
+          )
+          data[totalKey] = parseFloat(total)
+        }
       }
     }
 
-    res.json({
-      adsgramEnabled, blockId, reward, dailyLimit, todayCount, totalEarned,
-      monetagEnabled, monetagZoneId, monetagReward, monetagDailyLimit, monetagTodayCount, monetagTotalEarned,
-      onclickaEnabled, onclickaSpotId, onclickaReward, onclickaDailyLimit, onclickaTodayCount, onclickaTotalEarned
-    })
+    res.json(data)
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
