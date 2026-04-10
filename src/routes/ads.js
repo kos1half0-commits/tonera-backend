@@ -394,23 +394,26 @@ router.get('/adsgram-info', async (req, res) => {
 
     // Get settings
     const { rows: settings } = await pool.query(
-      "SELECT key,value FROM settings WHERE key IN ('adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_spot_id','onclicka_reward','onclicka_daily_limit')"
+      "SELECT key,value FROM settings WHERE key IN ('adsgram_enabled','adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_enabled','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_enabled','onclicka_spot_id','onclicka_reward','onclicka_daily_limit')"
     )
     const s = {}
     settings.forEach(r => s[r.key] = r.value)
     const blockId = s.adsgram_block_id || ''
     const reward = parseFloat(s.adsgram_reward) || 0.0001
     const dailyLimit = parseInt(s.adsgram_daily_limit) || 10
+    const adsgramEnabled = s.adsgram_enabled !== '0'
 
     // Monetag
     const monetagZoneId = s.monetag_zone_id || ''
     const monetagReward = parseFloat(s.monetag_reward) || 0.0001
     const monetagDailyLimit = parseInt(s.monetag_daily_limit) || 10
+    const monetagEnabled = s.monetag_enabled !== '0'
 
     // OnClickA
     const onclickaSpotId = s.onclicka_spot_id || ''
     const onclickaReward = parseFloat(s.onclicka_reward) || 0.0001
     const onclickaDailyLimit = parseInt(s.onclicka_daily_limit) || 10
+    const onclickaEnabled = s.onclicka_enabled !== '0'
 
     let todayCount = 0
     let totalEarned = 0
@@ -464,9 +467,9 @@ router.get('/adsgram-info', async (req, res) => {
     }
 
     res.json({
-      blockId, reward, dailyLimit, todayCount, totalEarned,
-      monetagZoneId, monetagReward, monetagDailyLimit, monetagTodayCount, monetagTotalEarned,
-      onclickaSpotId, onclickaReward, onclickaDailyLimit, onclickaTodayCount, onclickaTotalEarned
+      adsgramEnabled, blockId, reward, dailyLimit, todayCount, totalEarned,
+      monetagEnabled, monetagZoneId, monetagReward, monetagDailyLimit, monetagTodayCount, monetagTotalEarned,
+      onclickaEnabled, onclickaSpotId, onclickaReward, onclickaDailyLimit, onclickaTodayCount, onclickaTotalEarned
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
