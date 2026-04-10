@@ -423,6 +423,7 @@ export async function runMigrations() {
   await pool.query("INSERT INTO settings (key,value) VALUES ('miner_electricity_120','0') ON CONFLICT (key) DO NOTHING")
 
   // === Adsgram Ads ===
+  await pool.query("INSERT INTO settings (key,value) VALUES ('ad_cooldown_seconds','60') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('adsgram_enabled','1') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('adsgram_block_id','') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('adsgram_reward','0.001') ON CONFLICT (key) DO NOTHING")

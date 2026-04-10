@@ -434,11 +434,12 @@ router.get('/adsgram-info', async (req, res) => {
   try {
     const tgId = req.telegramUser?.id
     const { rows: settings } = await pool.query(
-      "SELECT key,value FROM settings WHERE key IN ('adsgram_enabled','adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_enabled','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_enabled','onclicka_spot_id','onclicka_reward','onclicka_daily_limit','richads_enabled','richads_widget_id','richads_reward','richads_daily_limit','tads_enabled','tads_widget_id','tads_reward','tads_daily_limit')"
+      "SELECT key,value FROM settings WHERE key IN ('ad_cooldown_seconds','adsgram_enabled','adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_enabled','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_enabled','onclicka_spot_id','onclicka_reward','onclicka_daily_limit','richads_enabled','richads_widget_id','richads_reward','richads_daily_limit','tads_enabled','tads_widget_id','tads_reward','tads_daily_limit')"
     )
     const s = {}; settings.forEach(r => s[r.key] = r.value)
 
     const data = {
+      cooldownSeconds: parseInt(s.ad_cooldown_seconds) || 60,
       adsgramEnabled: s.adsgram_enabled !== '0', blockId: s.adsgram_block_id || '', reward: parseFloat(s.adsgram_reward) || 0.0001, dailyLimit: parseInt(s.adsgram_daily_limit) || 10, todayCount: 0, totalEarned: 0,
       monetagEnabled: s.monetag_enabled !== '0', monetagZoneId: s.monetag_zone_id || '', monetagReward: parseFloat(s.monetag_reward) || 0.0001, monetagDailyLimit: parseInt(s.monetag_daily_limit) || 10, monetagTodayCount: 0, monetagTotalEarned: 0,
       onclickaEnabled: s.onclicka_enabled !== '0', onclickaSpotId: s.onclicka_spot_id || '', onclickaReward: parseFloat(s.onclicka_reward) || 0.0001, onclickaDailyLimit: parseInt(s.onclicka_daily_limit) || 10, onclickaTodayCount: 0, onclickaTotalEarned: 0,
@@ -532,7 +533,7 @@ router.get('/admin-stats', async (req, res) => {
       })
     }
 
-    // Top users
+      // Top users
     const { rows: topUsers } = await pool.query(`
       SELECT u.telegram_id, u.username, u.first_name, COUNT(*) as views, COALESCE(SUM(t.amount),0) as earned
       FROM transactions t JOIN users u ON u.id = t.user_id
@@ -540,8 +541,56 @@ router.get('/admin-stats', async (req, res) => {
       GROUP BY u.id ORDER BY earned DESC LIMIT 10
     `)
 
-    res.json({ stats, totalAll, todayAll, earnedAll, topUsers })
+    // Startup ad stats
+    const { rows: [{ count: startupTotal }] } = await pool.query(
+      `SELECT COUNT(*) as count FROM transactions WHERE type='startup_ad'`
+    )
+    const { rows: [{ count: startupToday }] } = await pool.query(
+      `SELECT COUNT(*) as count FROM transactions WHERE type='startup_ad' AND created_at > NOW() - INTERVAL '24 hours'`
+    )
+    const { rows: [{ count: startupYesterday }] } = await pool.query(
+      `SELECT COUNT(*) as count FROM transactions WHERE type='startup_ad' AND created_at > NOW() - INTERVAL '48 hours' AND created_at <= NOW() - INTERVAL '24 hours'`
+    )
+    const { rows: [{ count: startupWeek }] } = await pool.query(
+      `SELECT COUNT(*) as count FROM transactions WHERE type='startup_ad' AND created_at > NOW() - INTERVAL '7 days'`
+    )
+    const { rows: [{ count: startupUsers }] } = await pool.query(
+      `SELECT COUNT(DISTINCT user_id) as count FROM transactions WHERE type='startup_ad'`
+    )
+    // Per-network startup breakdown
+    const { rows: startupByNet } = await pool.query(`
+      SELECT label as network, COUNT(*) as count
+      FROM transactions WHERE type='startup_ad' AND created_at > NOW() - INTERVAL '24 hours'
+      GROUP BY label ORDER BY count DESC
+    `)
+
+    const startupStats = {
+      total: parseInt(startupTotal), today: parseInt(startupToday),
+      yesterday: parseInt(startupYesterday), week: parseInt(startupWeek),
+      users: parseInt(startupUsers), byNetwork: startupByNet
+    }
+
+    res.json({ stats, totalAll, todayAll, earnedAll, topUsers, startupStats })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/ads/startup-view — записать стартовый показ рекламы
+router.post('/startup-view', async (req, res) => {
+  try {
+    const tgId = req.telegramUser?.id
+    if (!tgId) return res.status(401).json({ error: 'Auth required' })
+    const { network } = req.body
+    const { rows: [user] } = await pool.query('SELECT id FROM users WHERE telegram_id=$1', [tgId])
+    if (!user) return res.status(404).json({ error: 'User not found' })
+
+    // Record startup ad view (no reward, just tracking)
+    await pool.query(
+      "INSERT INTO transactions (user_id,type,amount,label) VALUES ($1,'startup_ad',0,$2)",
+      [user.id, network || 'unknown']
+    )
+    res.json({ ok: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 export default router
+
