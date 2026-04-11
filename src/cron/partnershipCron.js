@@ -49,46 +49,66 @@ async function checkPartners() {
   let botInfo
   try { botInfo = await bot.getMe() } catch { return }
 
+  // Load min subs setting
+  const { rows: [minSubsRow] } = await pool.query("SELECT value FROM settings WHERE key='partnership_min_subs'")
+  const minSubs = parseInt(minSubsRow?.value || 1000)
+
   for (const p of partners) {
     const issues = []
     let subCount = 0
+    let critical = false // critical = auto-block partnership
 
     try {
       const match = p.channel_url.match(/t\.me\/([^/?]+)/)
       if (!match) continue
       const channelName = '@' + match[1]
 
-      // Check bot is still admin
+      // 1. Check bot is still admin with posting rights
       try {
         const member = await bot.getChatMember(channelName, botInfo.id).catch(() => null)
         if (!member || !['administrator', 'creator'].includes(member.status)) {
-          issues.push('❌ Бот удалён из администраторов')
+          issues.push('❌ Бот удалён из администраторов канала')
+          critical = true
+        } else if (!member.can_post_messages && member.status !== 'creator') {
+          issues.push('❌ У бота нет права публикации сообщений')
+          critical = true
+        } else {
+          issues.push('✅ Бот — администратор с правами публикации')
         }
       } catch {
-        issues.push('⚠️ Не удалось проверить канал')
+        issues.push('⚠️ Не удалось проверить статус бота в канале')
       }
 
-      // Check post still exists
+      // 2. Check subscriber count vs minimum
+      try {
+        subCount = await bot.getChatMemberCount(channelName).catch(() => 0)
+        if (subCount < minSubs) {
+          issues.push(`❌ Подписчиков: ${subCount} (минимум: ${minSubs})`)
+          critical = true
+        } else {
+          issues.push(`✅ Подписчиков: ${subCount.toLocaleString()}`)
+        }
+      } catch {
+        issues.push('⚠️ Не удалось проверить количество подписчиков')
+      }
+
+      // 3. Check promo post still exists
       if (p.post_url) {
         try {
           const postMatch = p.post_url.match(/t\.me\/([^/]+)\/(\d+)/)
           if (postMatch) {
             const msg = await bot.forwardMessage(ADMIN_TG_ID, '@' + postMatch[1], parseInt(postMatch[2])).catch(() => null)
             if (!msg) {
-              issues.push('❌ Рекламный пост удалён')
+              issues.push('❌ Рекламный пост удалён из канала')
             } else {
               await bot.deleteMessage(ADMIN_TG_ID, msg.message_id).catch(() => {})
+              issues.push('✅ Рекламный пост на месте')
             }
           }
         } catch {
-          issues.push('⚠️ Не удалось проверить пост')
+          issues.push('⚠️ Не удалось проверить рекламный пост')
         }
       }
-
-      // Get subscriber count
-      try {
-        subCount = await bot.getChatMemberCount(channelName).catch(() => 0)
-      } catch {}
 
     } catch (e) {
       console.error(`Partnership #${p.id} check error:`, e.message)
@@ -98,7 +118,6 @@ async function checkPartners() {
     // Update last checked
     await pool.query('UPDATE partnerships SET last_checked_at = NOW() WHERE id = $1', [p.id])
 
-    // If issues found — pause task and notify
     const hasProblems = issues.some(i => i.startsWith('❌'))
 
     if (hasProblems && p.task_id) {
@@ -108,31 +127,64 @@ async function checkPartners() {
       const partnerName = p.username ? `@${p.username}` : p.first_name || 'Партнёр'
       const issueText = issues.join('\n')
 
-      // Notify admin
-      try {
-        bot.sendMessage(ADMIN_TG_ID,
-          `🤝 <b>Проблема с партнёром #${p.id}</b>\n\n` +
-          `👤 ${partnerName}\n` +
-          `📢 ${p.channel_url}\n` +
-          `👥 Подписчиков: ${subCount}\n\n` +
-          `${issueText}\n\n` +
-          `⏸ Задание автоматически приостановлено`,
-          { parse_mode: 'HTML' }
-        ).catch(() => {})
-      } catch {}
+      if (critical) {
+        // Critical violation — block partnership
+        await pool.query(
+          "UPDATE partnerships SET status = 'suspended', suspended_reason = $1 WHERE id = $2",
+          [issues.filter(i => i.startsWith('❌')).join('; '), p.id]
+        )
 
-      // Notify partner
-      try {
-        bot.sendMessage(p.telegram_id,
-          `🤝 <b>Внимание: проблема с партнёрством</b>\n\n` +
-          `${issueText}\n\n` +
-          `⏸ Ваше задание приостановлено до устранения проблемы.\n` +
-          `Пожалуйста, исправьте проблемы и свяжитесь с поддержкой.`,
-          { parse_mode: 'HTML' }
-        ).catch(() => {})
-      } catch {}
+        // Notify admin
+        try {
+          bot.sendMessage(ADMIN_TG_ID,
+            `🚨 <b>Партнёрство #${p.id} ЗАБЛОКИРОВАНО</b>\n\n` +
+            `👤 ${partnerName}\n` +
+            `📢 ${p.channel_url}\n` +
+            `👥 Подписчиков: ${subCount}\n\n` +
+            `${issueText}\n\n` +
+            `🔴 Партнёрство автоматически заблокировано`,
+            { parse_mode: 'HTML' }
+          ).catch(() => {})
+        } catch {}
 
-      console.log(`🤝 Partnership #${p.id} — issues found, task paused: ${issues.join(', ')}`)
+        // Notify partner
+        try {
+          bot.sendMessage(p.telegram_id,
+            `🚨 <b>Партнёрство заблокировано</b>\n\n` +
+            `Ваше партнёрство заблокировано из-за нарушения правил:\n\n` +
+            `${issues.filter(i => i.startsWith('❌')).join('\n')}\n\n` +
+            `⏸ Задание деактивировано.\n` +
+            `Для разблокировки устраните проблемы и обратитесь к администратору.`,
+            { parse_mode: 'HTML' }
+          ).catch(() => {})
+        } catch {}
+
+        console.log(`🚨 Partnership #${p.id} — BLOCKED: ${issues.filter(i => i.startsWith('❌')).join(', ')}`)
+      } else {
+        // Non-critical — just pause task
+        try {
+          bot.sendMessage(ADMIN_TG_ID,
+            `🤝 <b>Проблема с партнёром #${p.id}</b>\n\n` +
+            `👤 ${partnerName}\n` +
+            `📢 ${p.channel_url}\n` +
+            `👥 Подписчиков: ${subCount}\n\n` +
+            `${issueText}\n\n` +
+            `⏸ Задание приостановлено`,
+            { parse_mode: 'HTML' }
+          ).catch(() => {})
+        } catch {}
+
+        try {
+          bot.sendMessage(p.telegram_id,
+            `🤝 <b>Внимание: проблема с партнёрством</b>\n\n` +
+            `${issueText}\n\n` +
+            `⏸ Ваше задание приостановлено до устранения проблемы.`,
+            { parse_mode: 'HTML' }
+          ).catch(() => {})
+        } catch {}
+
+        console.log(`🤝 Partnership #${p.id} — issues found, task paused`)
+      }
     } else {
       // Auto-upgrade max_executions by level
       if (p.task_id && subCount > 0) {
@@ -151,20 +203,16 @@ async function checkPartners() {
           for (const l of LEVELS) { if (subCount >= l.min) currentLevel = l }
           const levelMaxExecs = parseInt(lvlSettings[currentLevel.settingKey] || currentLevel.defaultExecs)
 
-          // Check current task max_executions
           const { rows: [taskRow] } = await pool.query('SELECT max_executions FROM tasks WHERE id=$1', [p.task_id])
           if (taskRow && parseInt(taskRow.max_executions) < levelMaxExecs) {
             await pool.query('UPDATE tasks SET max_executions=$1 WHERE id=$2', [levelMaxExecs, p.task_id])
-            console.log(`🤝 Partnership #${p.id} — UPGRADED to ${currentLevel.name}: max_executions ${taskRow.max_executions} → ${levelMaxExecs}`)
+            console.log(`🤝 Partnership #${p.id} — UPGRADED to ${currentLevel.name}: ${taskRow.max_executions} → ${levelMaxExecs}`)
 
-            // Notify partner about upgrade
             try {
-              const partnerName = p.username ? `@${p.username}` : p.first_name || 'Партнёр'
               bot.sendMessage(p.telegram_id,
-                `🏅 <b>Поздравляем! Ваш уровень партнёрства повышен!</b>\n\n` +
-                `${currentLevel.name === 'Silver' ? '🥈' : currentLevel.name === 'Gold' ? '🥇' : '💎'} Новый уровень: <b>${currentLevel.name}</b>\n` +
-                `📊 Макс. выполнений задания: <b>${levelMaxExecs}</b>\n\n` +
-                `Продолжайте развивать канал для повышения уровня!`,
+                `🏅 <b>Уровень партнёрства повышен!</b>\n\n` +
+                `${currentLevel.name === 'Silver' ? '🥈' : currentLevel.name === 'Gold' ? '🥇' : '💎'} Уровень: <b>${currentLevel.name}</b>\n` +
+                `📊 Выполнений в месяц: <b>${levelMaxExecs}</b>`,
                 { parse_mode: 'HTML' }
               ).catch(() => {})
             } catch {}
