@@ -274,7 +274,7 @@ export async function autoPostPartners() {
     }
 
     // Build promo text block for {PROMO} placeholder
-    const promoBlock = `\n\n🎁 Промокод: ${code.toUpperCase()}\n💰 Награда: ${reward} TON (${maxUses} активаций)`
+    const promoBlock = `\n\n🎁 Промокод: ${code.toUpperCase()}`
 
     const refLink = p.ref_code ? `t.me/${botUsername}?start=${p.ref_code}` : `t.me/${botUsername}`
     postText = postText
