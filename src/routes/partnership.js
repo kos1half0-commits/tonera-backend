@@ -101,9 +101,14 @@ router.get('/my', async (req, res) => {
     const tgId = req.telegramUser.id
     const { rows: [user] } = await pool.query('SELECT * FROM users WHERE telegram_id=$1', [tgId])
     const { rows: [p] } = await pool.query('SELECT * FROM partnerships WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1', [user.id])
-    const { rows: s } = await pool.query("SELECT key,value FROM settings WHERE key IN ('partnership_min_subs','partnership_enabled')")
-    const min_subs = parseInt(s.find(r => r.key === 'partnership_min_subs')?.value || 1000)
-    const enabled = s.find(r => r.key === 'partnership_enabled')?.value || '1'
+    const { rows: allSettings } = await pool.query(
+      "SELECT key,value FROM settings WHERE key LIKE 'partnership_%' OR key LIKE 'partner_promo_%'"
+    )
+    const cfg = {}
+    allSettings.forEach(r => cfg[r.key] = r.value)
+
+    const min_subs = parseInt(cfg['partnership_min_subs'] || 1000)
+    const enabled = cfg['partnership_enabled'] || '1'
 
     // Check cooldown for cancelled partnerships
     let cooldown_until = null
@@ -120,8 +125,7 @@ router.get('/my', async (req, res) => {
     if (p?.status === 'approved' && p.channel_url) {
       const subsCheck = await checkChannelSubs(p.channel_url).catch(() => ({ ok: false, count: 0 }))
       const subCount = subsCheck.ok ? subsCheck.count : 0
-      const lvlSettings = await loadLevelSettings()
-      level = getLevel(subCount, lvlSettings)
+      level = getLevel(subCount, cfg)
 
       // Get task stats
       if (p.task_id) {
@@ -138,6 +142,17 @@ router.get('/my', async (req, res) => {
       }
     }
 
+    // Build levels config for landing page (always returned)
+    const levelsConfig = LEVELS.map(l => ({
+      name: l.name,
+      emoji: l.emoji,
+      color: l.color,
+      min: l.min,
+      maxExecs: parseInt(cfg[l.settingKey] || l.defaultExecs),
+      promoReward: parseFloat(cfg[`partner_promo_${l.name.toLowerCase()}_reward`] || '0.01'),
+      promoUses: parseInt(cfg[`partner_promo_${l.name.toLowerCase()}_uses`] || '10'),
+    }))
+
     res.json({
       partnership: p || null,
       referral_count: user.referral_count,
@@ -148,6 +163,7 @@ router.get('/my', async (req, res) => {
       level,
       taskStats,
       cooldown_until,
+      levels: levelsConfig,
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
