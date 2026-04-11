@@ -486,23 +486,19 @@ router.post('/maintenance', adminOnly, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-// GET /api/admin/backup
+// GET /api/admin/backup — ПОЛНЫЙ бэкап всех таблиц
 router.get('/backup', adminOnly, async (req, res) => {
   try {
-    const [users, stakes, tasks, transactions, settings] = await Promise.all([
-      pool.query('SELECT * FROM users'),
-      pool.query('SELECT * FROM stakes'),
-      pool.query('SELECT * FROM tasks'),
-      pool.query('SELECT * FROM transactions ORDER BY created_at DESC LIMIT 10000'),
-      pool.query('SELECT * FROM settings'),
-    ])
-    const backup = {
-      date: new Date().toISOString(),
-      users: users.rows,
-      stakes: stakes.rows,
-      tasks: tasks.rows,
-      transactions: transactions.rows,
-      settings: settings.rows,
+    const { rows: tableList } = await pool.query(
+      "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
+    )
+    const backup = { date: new Date().toISOString(), version: 2, tables: {}, summary: {} }
+    for (const { tablename } of tableList) {
+      try {
+        const { rows } = await pool.query(`SELECT * FROM "${tablename}"`)
+        backup.tables[tablename] = rows
+        backup.summary[tablename] = rows.length
+      } catch (e) { console.warn(`Backup skip ${tablename}:`, e.message) }
     }
     res.setHeader('Content-Type', 'application/json')
     res.setHeader('Content-Disposition', `attachment; filename=tonera-backup-${new Date().toISOString().slice(0,10)}.json`)
@@ -510,64 +506,73 @@ router.get('/backup', adminOnly, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-// POST /api/admin/restore — восстановление из бэкапа
+// POST /api/admin/restore — восстановление из бэкапа (v2 — все таблицы)
 router.post('/restore', adminOnly, async (req, res) => {
   const client = await pool.connect()
   try {
-    const { users, stakes, tasks, transactions, settings } = req.body
-    if (!users || !stakes) return res.status(400).json({ error: 'Invalid backup file' })
-
+    const data = req.body
+    const tables = data.version === 2 ? data.tables : {
+      users: data.users, stakes: data.stakes, tasks: data.tasks,
+      transactions: data.transactions, settings: data.settings,
+    }
+    if (!tables || Object.keys(tables).length === 0) {
+      return res.status(400).json({ error: 'Invalid backup — no tables' })
+    }
     await client.query('BEGIN')
-
-    // Восстанавливаем настройки
-    if (settings?.length) {
-      for (const s of settings) {
-        await client.query(
-          'INSERT INTO settings (key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=$2',
-          [s.key, s.value]
-        )
+    await client.query('SET session_replication_role = replica')
+    const priority = ['settings', 'users', 'admins']
+    const orderedKeys = [
+      ...priority.filter(k => tables[k]),
+      ...Object.keys(tables).filter(k => !priority.includes(k))
+    ]
+    const restored = {}
+    for (const tbl of orderedKeys) {
+      const rows = tables[tbl]
+      if (!rows || !rows.length) continue
+      const { rows: cols } = await client.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_name=$1 AND table_schema='public' ORDER BY ordinal_position", [tbl]
+      )
+      if (!cols.length) continue
+      const colNames = cols.map(c => c.column_name)
+      const { rows: pkRows } = await client.query(
+        `SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey) WHERE i.indrelid=$1::regclass AND i.indisprimary`, [tbl]
+      )
+      const pkCols = pkRows.map(r => r.attname)
+      let cnt = 0
+      for (const row of rows) {
+        const validCols = colNames.filter(c => row[c] !== undefined)
+        if (!validCols.length) continue
+        const vals = validCols.map(c => row[c])
+        const ph = vals.map((_, i) => `$${i+1}`).join(',')
+        const cl = validCols.map(c => `"${c}"`).join(',')
+        let q
+        if (pkCols.length > 0) {
+          const conf = pkCols.map(c => `"${c}"`).join(',')
+          const upd = validCols.filter(c => !pkCols.includes(c))
+          if (upd.length > 0) {
+            const us = upd.map(c => `"${c}"=$${validCols.indexOf(c)+1}`).join(',')
+            q = `INSERT INTO "${tbl}" (${cl}) VALUES (${ph}) ON CONFLICT (${conf}) DO UPDATE SET ${us}`
+          } else {
+            q = `INSERT INTO "${tbl}" (${cl}) VALUES (${ph}) ON CONFLICT (${conf}) DO NOTHING`
+          }
+        } else {
+          q = `INSERT INTO "${tbl}" (${cl}) VALUES (${ph}) ON CONFLICT DO NOTHING`
+        }
+        try { await client.query(q, vals); cnt++ } catch (e) { console.warn(`Restore err ${tbl}:`, e.message) }
       }
+      restored[tbl] = cnt
     }
-
-    // Восстанавливаем пользователей
-    for (const u of users) {
-      await client.query(`
-        INSERT INTO users (id,telegram_id,username,first_name,balance_ton,bonus_balance,ref_code,referred_by,referral_count,is_blocked,ton_address,welcome_bonus_claimed,pending_ref,created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-        ON CONFLICT (id) DO UPDATE SET
-          balance_ton=$5, bonus_balance=$6, referral_count=$9, is_blocked=$10, ton_address=$11
-      `, [u.id,u.telegram_id,u.username,u.first_name,u.balance_ton,u.bonus_balance,u.ref_code,u.referred_by,u.referral_count,u.is_blocked,u.ton_address,u.welcome_bonus_claimed,u.pending_ref,u.created_at])
+    await client.query('SET session_replication_role = DEFAULT')
+    for (const tbl of orderedKeys) {
+      try { await client.query(`SELECT setval(pg_get_serial_sequence('"${tbl}"','id'), COALESCE((SELECT MAX(id) FROM "${tbl}"),1))`) } catch {}
     }
-
-    // Восстанавливаем стейки
-    for (const s of stakes) {
-      await client.query(`
-        INSERT INTO stakes (id,user_id,amount,earned,started_at,status,created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-        ON CONFLICT (id) DO UPDATE SET amount=$3, earned=$4, status=$6
-      `, [s.id,s.user_id,s.amount,s.earned,s.started_at,s.status,s.created_at])
-    }
-
-    // Восстанавливаем задания
-    if (tasks?.length) {
-      for (const t of tasks) {
-        await client.query(`
-          INSERT INTO tasks (id,creator_id,type,title,description,link,channel_title,channel_photo,icon,reward,price_per_exec,ref_bonus,project_fee,max_executions,executions,budget,active,created_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-          ON CONFLICT (id) DO NOTHING
-        `, [t.id,t.creator_id,t.type,t.title,t.description,t.link,t.channel_title,t.channel_photo,t.icon,t.reward,t.price_per_exec,t.ref_bonus,t.project_fee,t.max_executions,t.executions,t.budget,t.active,t.created_at])
-      }
-    }
-
     await client.query('COMMIT')
-    res.json({ ok: true, restored: { users: users.length, stakes: stakes.length, tasks: tasks?.length || 0 } })
+    res.json({ ok: true, restored })
   } catch (e) {
     await client.query('ROLLBACK')
-    console.error(e)
+    console.error('Restore error:', e)
     res.status(500).json({ error: e.message })
-  } finally {
-    client.release()
-  }
+  } finally { client.release() }
 })
 
 

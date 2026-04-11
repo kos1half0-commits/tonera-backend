@@ -34,8 +34,8 @@ const app = express()
 const PORT = process.env.PORT || 3000
 
 app.use(cors({ origin: '*' }))
-app.use(express.json({ limit: '10mb' }))
-app.use(express.urlencoded({ extended: true, limit: '10mb' }))
+app.use(express.json({ limit: '100mb' }))
+app.use(express.urlencoded({ extended: true, limit: '100mb' }))
 
 // settings endpoint перенесён после telegramAuth
 
