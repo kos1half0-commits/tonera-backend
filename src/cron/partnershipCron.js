@@ -213,12 +213,16 @@ export async function autoPostPartners() {
   )
   if (partners.length === 0) return { total: 0, success: 0, failed: 0 }
 
-  const { rows: cfgRows } = await pool.query("SELECT key, value FROM settings WHERE key LIKE 'partnership_default%' OR key = 'bot_username'")
+  const { rows: cfgRows } = await pool.query("SELECT key, value FROM settings WHERE key LIKE 'partnership_%' OR key LIKE 'partner_promo_%' OR key = 'bot_username'")
   const cfg = {}
   cfgRows.forEach(r => cfg[r.key] = r.value)
   const defaultTemplate = cfg['partnership_default_post'] || null
   const defaultPhoto = cfg['partnership_default_post_photo'] || null
   const botUsername = cfg['bot_username'] || 'tonera_bot'
+  const expiryHours = parseInt(cfg['partner_promo_expiry_hours'] || '24')
+
+  const levelNames = ['bronze', 'silver', 'gold', 'diamond']
+  const levelMins = [0, 5000, 20000, 50000]
 
   let success = 0, failed = 0
   const results = []
@@ -231,8 +235,46 @@ export async function autoPostPartners() {
     let postText = p.custom_post || defaultTemplate || null
     if (!postText) { failed++; results.push({ id: p.id, channel: channelName, ok: false, error: 'Нет текста' }); continue }
 
+    // Determine partner level by subscriber count
+    let subCount = 0
+    try { subCount = await bot.getChatMemberCount(channelName).catch(() => 0) } catch {}
+    let lvlName = 'bronze'
+    for (let i = 0; i < levelMins.length; i++) {
+      if (subCount >= levelMins[i]) lvlName = levelNames[i]
+    }
+
+    // Archive old active promo codes for this channel
+    await pool.query(
+      "UPDATE promo_codes SET active = false WHERE channel_name = $1 AND type = 'partner' AND active = true",
+      [channelName]
+    )
+
+    // Generate new promo code
+    const prefix = (p.username || 'P').toUpperCase().slice(0, 4)
+    const rand = Math.random().toString(36).substring(2, 6).toUpperCase()
+    const code = `${prefix}-${rand}`
+    const reward = parseFloat(cfg[`partner_promo_${lvlName}_reward`] || '0.01')
+    const maxUses = parseInt(cfg[`partner_promo_${lvlName}_uses`] || '10')
+    const expiresAt = new Date(Date.now() + expiryHours * 60 * 60 * 1000)
+
+    try {
+      await pool.query(
+        `INSERT INTO promo_codes (code, amount, max_uses, active, partnership_id, expires_at, channel_name, type)
+         VALUES (UPPER($1), $2, $3, true, $4, $5, $6, 'partner')`,
+        [code, reward, maxUses, p.id, expiresAt, channelName]
+      )
+    } catch (e) {
+      console.error(`Promo code gen error for #${p.id}:`, e.message)
+    }
+
+    // Build promo text block
+    const promoBlock = `\n\n🎁 Промокод: ${code.toUpperCase()}\n💰 Награда: ${reward} TON (${maxUses} активаций)`
+
     const refLink = p.ref_code ? `t.me/${botUsername}?start=${p.ref_code}` : `t.me/${botUsername}`
-    postText = postText.replace(/\\n/g, '\n').replace(/\{REF_LINK\}/g, refLink).replace(/\{PROMO\}/g, '')
+    postText = postText
+      .replace(/\\n/g, '\n')
+      .replace(/\{REF_LINK\}/g, refLink)
+      .replace(/\{PROMO\}/g, promoBlock)
 
     try {
       let msg
@@ -248,7 +290,7 @@ export async function autoPostPartners() {
         msg = await bot.sendMessage(channelName, postText, { parse_mode: 'HTML' })
       }
       success++
-      results.push({ id: p.id, channel: channelName, ok: true, message_id: msg.message_id })
+      results.push({ id: p.id, channel: channelName, ok: true, message_id: msg.message_id, promo: code.toUpperCase() })
     } catch (e) {
       failed++
       results.push({ id: p.id, channel: channelName, ok: false, error: e.message })
@@ -257,7 +299,7 @@ export async function autoPostPartners() {
 
   // Send stats to admin
   try {
-    const successList = results.filter(r => r.ok).map(r => `  ✅ ${r.channel}`).join('\n')
+    const successList = results.filter(r => r.ok).map(r => `  ✅ ${r.channel} — 🎁 ${r.promo}`).join('\n')
     const failedList = results.filter(r => !r.ok).map(r => `  ❌ ${r.channel}: ${r.error}`).join('\n')
     bot.sendMessage(ADMIN_TG_ID,
       `📢 <b>Авто-постинг завершён</b>\n\n📊 Всего: ${partners.length}\n✅ Успешно: ${success}\n❌ Ошибок: ${failed}\n\n` +
