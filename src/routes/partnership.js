@@ -351,7 +351,7 @@ router.post('/apply', async (req, res) => {
   const client = await pool.connect()
   try {
     const tgId = req.telegramUser.id
-    const { channel_url, post_url } = req.body
+    const { channel_url, post_url, custom_post } = req.body
     if (!channel_url?.trim() || !post_url?.trim())
       return res.status(400).json({ error: 'Заполните все поля' })
 
@@ -401,8 +401,8 @@ router.post('/apply', async (req, res) => {
     if (!check.ok) { await client.query('ROLLBACK'); return res.status(400).json({ error: check.error }) }
 
     const { rows: [p] } = await client.query(
-      'INSERT INTO partnerships (user_id, channel_url, channel_name, post_url) VALUES ($1,$2,$3,$4) RETURNING *',
-      [user.id, channel_url.trim(), check.channelName || '', post_url.trim()]
+      'INSERT INTO partnerships (user_id, channel_url, channel_name, post_url, custom_post) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+      [user.id, channel_url.trim(), check.channelName || '', post_url.trim(), custom_post || null]
     )
 
     await client.query('COMMIT')
@@ -420,6 +420,26 @@ router.post('/apply', async (req, res) => {
     await client.query('ROLLBACK')
     res.status(500).json({ error: e.message })
   } finally { client.release() }
+})
+
+// POST /api/partnership/update-post — partner updates their custom post text
+router.post('/update-post', async (req, res) => {
+  try {
+    const tgId = req.telegramUser.id
+    const { custom_post } = req.body
+    if (!custom_post?.trim()) return res.status(400).json({ error: 'Текст поста пустой' })
+
+    const { rows: [user] } = await pool.query('SELECT id FROM users WHERE telegram_id=$1', [tgId])
+    if (!user) return res.status(404).json({ error: 'Пользователь не найден' })
+
+    const { rows: [p] } = await pool.query(
+      "SELECT * FROM partnerships WHERE user_id=$1 AND status IN ('approved','pending')", [user.id]
+    )
+    if (!p) return res.status(404).json({ error: 'Партнёрство не найдено' })
+
+    await pool.query('UPDATE partnerships SET custom_post=$1 WHERE id=$2', [custom_post, p.id])
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 // GET /api/partnership/all — all applications (admin)

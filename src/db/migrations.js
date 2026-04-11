@@ -196,6 +196,7 @@ export async function runMigrations() {
   await pool.query(`ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`)
   await pool.query(`ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS last_renewed_at TIMESTAMPTZ DEFAULT NOW()`)
   await pool.query(`ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS suspended_reason TEXT`)
+  await pool.query(`ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS custom_post TEXT`)
 
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_ref_percent','30') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_enabled','1') ON CONFLICT (key) DO NOTHING")
