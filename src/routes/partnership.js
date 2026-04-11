@@ -622,6 +622,39 @@ router.post('/cancel', async (req, res) => {
   } finally { client.release() }
 })
 
+// POST /api/partnership/unsuspend/:id — admin unblocks suspended partner
+router.post('/unsuspend/:id', async (req, res) => {
+  try {
+    const { rows: [p] } = await pool.query(
+      "SELECT * FROM partnerships WHERE id=$1 AND status='suspended'", [req.params.id]
+    )
+    if (!p) return res.status(404).json({ error: 'Партнёрство не найдено или не заблокировано' })
+
+    await pool.query(
+      "UPDATE partnerships SET status='approved', suspended_reason=NULL WHERE id=$1", [p.id]
+    )
+
+    // Reactivate task
+    if (p.task_id) {
+      await pool.query('UPDATE tasks SET active=true WHERE id=$1', [p.task_id])
+    }
+
+    // Notify partner
+    try {
+      const { rows: [user] } = await pool.query('SELECT telegram_id FROM users WHERE id=$1', [p.user_id])
+      const bot = getBot()
+      if (bot && user) {
+        bot.sendMessage(user.telegram_id,
+          `✅ <b>Партнёрство разблокировано!</b>\n\nВаше партнёрство восстановлено. Задание снова активно.`,
+          { parse_mode: 'HTML' }
+        ).catch(() => {})
+      }
+    } catch {}
+
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // DELETE /api/partnership/:id — atomic delete with task deactivation
 router.delete('/:id', async (req, res) => {
   const client = await pool.connect()
