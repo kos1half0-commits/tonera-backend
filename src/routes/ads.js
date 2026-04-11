@@ -225,12 +225,10 @@ router.post('/partner-banner', async (req, res) => {
     const { title, text, image_url, link, pages } = req.body
     if (!title?.trim()) return res.status(400).json({ error: 'Введите заголовок' })
 
-    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
-
     const { rows: [ad] } = await pool.query(
-      `INSERT INTO ads (title, text, image_url, link, pages, type, partnership_id, user_id, expires_at)
-       VALUES ($1,$2,$3,$4,$5,'partner',$6,$7,$8) RETURNING *`,
-      [title.trim(), text || '', image_url || null, link || p.channel_url, pages || 'home,tasks,games,staking,miner,wallet', p.id, user.id, expiresAt]
+      `INSERT INTO ads (title, text, image_url, link, pages, type, partnership_id, user_id, active)
+       VALUES ($1,$2,$3,$4,$5,'partner',$6,$7,false) RETURNING *`,
+      [title.trim(), text || '', image_url || null, link || p.channel_url, pages || 'home,tasks,games,staking,miner,wallet', p.id, user.id]
     )
 
     try {
@@ -238,7 +236,7 @@ router.post('/partner-banner', async (req, res) => {
       const { ADMIN_TG_ID } = await import('../config.js')
       const bot = getBot()
       if (bot) await bot.sendMessage(ADMIN_TG_ID,
-        `📢 <b>Партнёр создал бесплатный баннер</b>\n\n👤 ${user.username ? '@' + user.username : user.first_name}\n📋 ${title}\n📢 Канал: ${p.channel_url}\n⏰ Истекает: ${expiresAt.toLocaleDateString('ru')}`,
+        `📢 <b>Новый баннер на модерацию</b>\n\n👤 ${user.username ? '@' + user.username : user.first_name}\n📋 ${title}\n📢 Канал: ${p.channel_url}\n⚠️ Требуется одобрение в админке`,
         { parse_mode: 'HTML' }
       )
     } catch { }
@@ -262,7 +260,79 @@ router.get('/my-banner', async (req, res) => {
     const { rows: [banner] } = await pool.query(
       "SELECT * FROM ads WHERE partnership_id=$1 AND type='partner' ORDER BY created_at DESC LIMIT 1", [p.id]
     )
-    res.json({ banner: banner || null, can_create: !banner })
+    res.json({ banner: banner || null, can_create: !banner, pending: banner && !banner.active && !banner.expires_at })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// GET /api/ads/pending-banners — баннеры на модерации (для админа)
+router.get('/pending-banners', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT a.*, u.username, u.first_name, u.telegram_id,
+             p.channel_url
+      FROM ads a
+      JOIN users u ON a.user_id = u.id
+      LEFT JOIN partnerships p ON a.partnership_id = p.id
+      WHERE a.type='partner' AND a.active=false AND a.expires_at IS NULL
+      ORDER BY a.created_at DESC
+    `)
+    res.json(rows)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/ads/approve-banner/:id — одобрить баннер
+router.post('/approve-banner/:id', async (req, res) => {
+  try {
+    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+    await pool.query(
+      'UPDATE ads SET active=true, expires_at=$1 WHERE id=$2',
+      [expiresAt, req.params.id]
+    )
+
+    // Уведомляем партнёра
+    const { rows: [ad] } = await pool.query('SELECT * FROM ads WHERE id=$1', [req.params.id])
+    if (ad?.user_id) {
+      const { rows: [user] } = await pool.query('SELECT telegram_id FROM users WHERE id=$1', [ad.user_id])
+      if (user) {
+        try {
+          const { getBot } = await import('../bot.js')
+          const bot = getBot()
+          if (bot) await bot.sendMessage(user.telegram_id,
+            `✅ <b>Ваш баннер одобрен!</b>\n\n📋 ${ad.title}\n⏰ Активен до: ${expiresAt.toLocaleDateString('ru')}\n\nБаннер теперь виден всем пользователям TonEra!`,
+            { parse_mode: 'HTML' }
+          )
+        } catch {}
+      }
+    }
+
+    res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/ads/reject-banner/:id — отклонить баннер
+router.post('/reject-banner/:id', async (req, res) => {
+  try {
+    const { rows: [ad] } = await pool.query('SELECT * FROM ads WHERE id=$1', [req.params.id])
+
+    // Удаляем баннер чтобы партнёр мог создать новый
+    await pool.query('DELETE FROM ads WHERE id=$1', [req.params.id])
+
+    // Уведомляем партнёра
+    if (ad?.user_id) {
+      const { rows: [user] } = await pool.query('SELECT telegram_id FROM users WHERE id=$1', [ad.user_id])
+      if (user) {
+        try {
+          const { getBot } = await import('../bot.js')
+          const bot = getBot()
+          if (bot) await bot.sendMessage(user.telegram_id,
+            `❌ <b>Баннер отклонён</b>\n\n📋 ${ad.title}\n${req.body.reason ? `📝 Причина: ${req.body.reason}` : ''}\n\nВы можете создать новый баннер с исправлениями.`,
+            { parse_mode: 'HTML' }
+          )
+        } catch {}
+      }
+    }
+
+    res.json({ ok: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
