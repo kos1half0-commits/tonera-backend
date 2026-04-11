@@ -434,7 +434,7 @@ router.get('/adsgram-info', async (req, res) => {
   try {
     const tgId = req.telegramUser?.id
     const { rows: settings } = await pool.query(
-      "SELECT key,value FROM settings WHERE key IN ('ad_cooldown_seconds','adsgram_enabled','adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_enabled','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_enabled','onclicka_spot_id','onclicka_reward','onclicka_daily_limit','richads_enabled','richads_widget_id','richads_reward','richads_daily_limit','tads_enabled','tads_widget_id','tads_reward','tads_daily_limit')"
+      "SELECT key,value FROM settings WHERE key IN ('ad_cooldown_seconds','adsgram_enabled','adsgram_block_id','adsgram_reward','adsgram_daily_limit','monetag_enabled','monetag_zone_id','monetag_reward','monetag_daily_limit','onclicka_enabled','onclicka_spot_id','onclicka_reward','onclicka_daily_limit','richads_enabled','richads_widget_id','richads_reward','richads_daily_limit','tads_enabled','tads_widget_id','tads_reward','tads_daily_limit','startup_ad_enabled','startup_ad_delay_min','startup_ad_delay_max','startup_ad_frequency','startup_ad_networks')"
     )
     const s = {}; settings.forEach(r => s[r.key] = r.value)
 
@@ -445,6 +445,12 @@ router.get('/adsgram-info', async (req, res) => {
       onclickaEnabled: s.onclicka_enabled !== '0', onclickaSpotId: s.onclicka_spot_id || '', onclickaReward: parseFloat(s.onclicka_reward) || 0.0001, onclickaDailyLimit: parseInt(s.onclicka_daily_limit) || 10, onclickaTodayCount: 0, onclickaTotalEarned: 0,
       richadsEnabled: s.richads_enabled !== '0', richadsWidgetId: s.richads_widget_id || '', richadsReward: parseFloat(s.richads_reward) || 0.0001, richadsDailyLimit: parseInt(s.richads_daily_limit) || 10, richadsTodayCount: 0, richadsTotalEarned: 0,
       tadsEnabled: s.tads_enabled !== '0', tadsWidgetId: s.tads_widget_id || '', tadsReward: parseFloat(s.tads_reward) || 0.0001, tadsDailyLimit: parseInt(s.tads_daily_limit) || 10, tadsTodayCount: 0, tadsTotalEarned: 0,
+      // Startup ad settings
+      startupAdEnabled: s.startup_ad_enabled !== '0',
+      startupAdDelayMin: parseInt(s.startup_ad_delay_min) || 5,
+      startupAdDelayMax: parseInt(s.startup_ad_delay_max) || 30,
+      startupAdFrequency: s.startup_ad_frequency || 'daily',
+      startupAdNetworks: s.startup_ad_networks || 'adsgram,monetag,onclicka,richads',
     }
 
     if (tgId) {

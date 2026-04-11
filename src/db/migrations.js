@@ -453,6 +453,13 @@ export async function runMigrations() {
   await pool.query("INSERT INTO settings (key,value) VALUES ('tads_reward','0.001') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('tads_daily_limit','10') ON CONFLICT (key) DO NOTHING")
 
+  // === Startup Ad Settings ===
+  await pool.query("INSERT INTO settings (key,value) VALUES ('startup_ad_enabled','1') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('startup_ad_delay_min','5') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('startup_ad_delay_max','30') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('startup_ad_frequency','daily') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('startup_ad_networks','adsgram,monetag,onclicka,richads') ON CONFLICT (key) DO NOTHING")
+
   // === Referral Auction ===
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ref_auctions (
