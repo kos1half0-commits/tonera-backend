@@ -52,7 +52,7 @@ router.post('/confirm', async (req, res) => {
     let txHash = null
 
     try {
-      const txRes = await fetch(`https://toncenter.com/api/v2/getTransactions?address=${projectWallet}&limit=20`)
+      const txRes = await fetch(`https://toncenter.com/api/v2/getTransactions?address=${projectWallet}&limit=50`)
       const txData = await txRes.json()
 
       if (txData.ok && txData.result) {
@@ -60,13 +60,18 @@ router.post('/confirm', async (req, res) => {
         const expectedNano = Math.floor(depositAmount * 1e9)
         const now = Date.now() / 1000
 
+        console.log(`[DEPOSIT] Looking for ${depositAmount} TON (${expectedNano} nano) on wallet ${projectWallet}`)
+        console.log(`[DEPOSIT] Found ${txData.result.length} transactions, scanning...`)
+
         for (const tx of txData.result) {
           const inMsg = tx.in_msg
           if (!inMsg || !inMsg.value) continue
           const txNano = parseInt(inMsg.value)
           const timeDiff = now - tx.utime
-          // Сумма совпадает (погрешность ±0.005 TON) и транзакция за последние 10 минут
-          if (Math.abs(txNano - expectedNano) < 5000000 && timeDiff < 600 && timeDiff > 0) {
+          const diffNano = Math.abs(txNano - expectedNano)
+
+          // Сумма совпадает (погрешность ±0.01 TON) и транзакция за последние 30 минут
+          if (diffNano < 10000000 && timeDiff < 1800 && timeDiff > 0) {
             txHash = tx.transaction_id?.hash || `${tx.utime}`
             // Проверяем что эта конкретная блокчейн-транзакция не использована
             const { rows: [usedChainTx] } = await client.query(
@@ -74,17 +79,25 @@ router.post('/confirm', async (req, res) => {
             )
             if (!usedChainTx) {
               realAmount = txNano / 1e9
+              console.log(`[DEPOSIT] ✅ Match found: ${realAmount} TON, hash=${txHash}, timeDiff=${Math.round(timeDiff)}s`)
               break
+            } else {
+              console.log(`[DEPOSIT] ⚠️ TX ${txHash} already used, skipping`)
             }
+          } else if (timeDiff < 1800 && timeDiff > 0) {
+            console.log(`[DEPOSIT] ❌ TX skipped: amount=${txNano/1e9} TON (diff=${diffNano/1e9}), timeDiff=${Math.round(timeDiff)}s`)
           }
         }
+      } else {
+        console.log(`[DEPOSIT] ❌ toncenter API error:`, txData)
       }
     } catch (e) {
-      console.error('TON verify error:', e.message)
+      console.error('[DEPOSIT] TON verify error:', e.message)
       return res.status(500).json({ error: 'Не удалось проверить транзакцию. Попробуйте позже.' })
     }
 
     if (!realAmount || !txHash) {
+      console.log(`[DEPOSIT] ❌ No matching TX found for user ${tgId}, amount=${amount} TON`)
       return res.status(400).json({ error: 'Транзакция не найдена в блокчейне. Подождите 15 секунд и попробуйте снова.' })
     }
 
