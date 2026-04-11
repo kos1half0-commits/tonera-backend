@@ -119,16 +119,37 @@ router.get('/my', async (req, res) => {
       }
     }
 
-    // Get level info for approved partners
+    // Get level info for approved partners + monthly renewal
     let level = null
     let taskStats = null
+    let renewsAt = null
     if (p?.status === 'approved' && p.channel_url) {
       const subsCheck = await checkChannelSubs(p.channel_url).catch(() => ({ ok: false, count: 0 }))
       const subCount = subsCheck.ok ? subsCheck.count : 0
       level = getLevel(subCount, cfg)
 
-      // Get task stats
+      // Monthly renewal check — reset executions every 30 days
       if (p.task_id) {
+        const lastRenewed = p.last_renewed_at ? new Date(p.last_renewed_at) : new Date(p.created_at)
+        const daysSinceRenewal = (Date.now() - lastRenewed.getTime()) / (24 * 60 * 60 * 1000)
+        const renewalDate = new Date(lastRenewed.getTime() + 30 * 24 * 60 * 60 * 1000)
+        renewsAt = renewalDate.toISOString()
+
+        if (daysSinceRenewal >= 30) {
+          // Time to renew! Reset executions, update max based on current level
+          await pool.query(
+            'UPDATE tasks SET executions = 0, max_executions = $1, active = true WHERE id = $2',
+            [level.maxExecs, p.task_id]
+          )
+          await pool.query(
+            'UPDATE partnerships SET last_renewed_at = NOW() WHERE id = $1',
+            [p.id]
+          )
+          renewsAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+          console.log(`[Partnership #${p.id}] Monthly renewal: reset executions, maxExecs=${level.maxExecs}`)
+        }
+
+        // Get task stats (after possible renewal)
         const { rows: [t] } = await pool.query('SELECT executions, max_executions, reward, active FROM tasks WHERE id=$1', [p.task_id])
         if (t) {
           taskStats = {
@@ -164,6 +185,7 @@ router.get('/my', async (req, res) => {
       taskStats,
       cooldown_until,
       levels: levelsConfig,
+      renewsAt,
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
