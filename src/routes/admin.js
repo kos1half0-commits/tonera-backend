@@ -901,6 +901,60 @@ router.post('/auction/create-orphan', adminOnly, async (req, res) => {
   } finally { client.release() }
 })
 
+// GET /api/admin/transactions — all transactions with filters
+router.get('/transactions', adminOnly, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || 1)
+    const limit = 50
+    const offset = (page - 1) * limit
+    const typeFilter = req.query.type || 'all' // all|deposit|withdraw|task|stake_*|trading|spin_result|admin_adjust|ref_bonus
+    const search = req.query.search || ''
+
+    let where = []
+    let params = []
+    let pi = 1
+
+    if (typeFilter !== 'all') {
+      where.push(`t.type = $${pi}`)
+      params.push(typeFilter)
+      pi++
+    }
+    if (search) {
+      where.push(`(u.username ILIKE $${pi} OR u.first_name ILIKE $${pi} OR CAST(u.telegram_id AS TEXT) LIKE $${pi} OR t.label ILIKE $${pi})`)
+      params.push(`%${search}%`)
+      pi++
+    }
+
+    const whereStr = where.length ? `WHERE ${where.join(' AND ')}` : ''
+
+    const { rows } = await pool.query(
+      `SELECT t.*, u.username, u.first_name, u.telegram_id
+       FROM transactions t
+       JOIN users u ON t.user_id = u.id
+       ${whereStr}
+       ORDER BY t.created_at DESC
+       LIMIT $${pi} OFFSET $${pi+1}`,
+      [...params, limit, offset]
+    )
+
+    const { rows: [cnt] } = await pool.query(`SELECT COUNT(*) FROM transactions t JOIN users u ON t.user_id = u.id ${whereStr}`, params)
+    const total = parseInt(cnt.count)
+
+    // Summary stats
+    const { rows: [summary] } = await pool.query(`
+      SELECT
+        COALESCE(SUM(CASE WHEN type='deposit' THEN amount ELSE 0 END),0) as total_deposits,
+        COALESCE(SUM(CASE WHEN type='withdraw' THEN ABS(amount) ELSE 0 END),0) as total_withdrawals,
+        COUNT(CASE WHEN type='deposit' THEN 1 END) as deposit_count,
+        COUNT(CASE WHEN type='withdraw' THEN 1 END) as withdrawal_count,
+        COUNT(*) as total_transactions
+      FROM transactions
+    `)
+
+    res.json({ transactions: rows, total, page, pages: Math.ceil(total / limit), summary })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 export default router
 
 
