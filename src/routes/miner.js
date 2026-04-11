@@ -254,6 +254,62 @@ router.post('/buy', async (req, res) => {
     const plan = plans.find(p => p.id === plan_id)
     if (!plan) return res.status(400).json({ error: 'План не найден' })
 
+    // === BLOCKCHAIN VERIFICATION ===
+    const minerWallet = s.miner_wallet || ''
+    if (!minerWallet) return res.status(500).json({ error: 'Кошелёк майнера не настроен' })
+
+    // Wait for transaction to appear
+    await new Promise(r => setTimeout(r, 8000))
+
+    let realAmount = 0
+    let chainHash = null
+
+    try {
+      const txRes = await fetch(`https://toncenter.com/api/v2/getTransactions?address=${minerWallet}&limit=50`)
+      const txData = await txRes.json()
+
+      if (txData.ok && txData.result) {
+        const expectedNano = Math.floor(plan.price * 1e9)
+        const now = Date.now() / 1000
+
+        console.log(`[MINER BUY] Looking for ${plan.price} TON (${expectedNano} nano) on wallet ${minerWallet}`)
+
+        for (const tx of txData.result) {
+          const inMsg = tx.in_msg
+          if (!inMsg || !inMsg.value) continue
+          const txNano = parseInt(inMsg.value)
+          const timeDiff = now - tx.utime
+          const diffNano = Math.abs(txNano - expectedNano)
+
+          if (diffNano < 10000000 && timeDiff < 1800 && timeDiff > 0) {
+            const hash = tx.transaction_id?.hash || `${tx.utime}`
+            const { rows: [usedChain] } = await client.query(
+              "SELECT id FROM transactions WHERE status=$1", [`miner_contract:${hash}`]
+            )
+            if (!usedChain) {
+              realAmount = txNano / 1e9
+              chainHash = hash
+              console.log(`[MINER BUY] ✅ Match: ${realAmount} TON, hash=${hash}`)
+              break
+            } else {
+              console.log(`[MINER BUY] ⚠️ TX ${hash} already used`)
+            }
+          }
+        }
+      } else {
+        console.log(`[MINER BUY] ❌ toncenter API error:`, txData)
+      }
+    } catch (e) {
+      console.error('[MINER BUY] Verify error:', e.message)
+      return res.status(500).json({ error: 'Не удалось проверить транзакцию. Попробуйте позже.' })
+    }
+
+    if (!realAmount || !chainHash) {
+      console.log(`[MINER BUY] ❌ No matching TX for user ${tgId}, plan=${plan_id}, expected=${plan.price} TON`)
+      return res.status(400).json({ error: 'Транзакция не найдена в блокчейне. Подождите 15 секунд и попробуйте снова.' })
+    }
+
+    // === CREATE CONTRACT ===
     const now = new Date()
     const expiresAt = new Date(now.getTime() + plan.days * 86400000)
 
@@ -262,12 +318,12 @@ router.post('/buy', async (req, res) => {
     const { rows: [contract] } = await client.query(
       `INSERT INTO miner_contracts (user_id, plan_id, hashrate, price_paid, duration_days, started_at, expires_at, last_accrual)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $6) RETURNING *`,
-      [user.id, plan.id, plan.hashrate, plan.price, plan.days, now, expiresAt]
+      [user.id, plan.id, plan.hashrate, realAmount, plan.days, now, expiresAt]
     )
 
     await client.query(
       "INSERT INTO transactions (user_id,type,amount,label,status) VALUES ($1,'miner_contract',$2,$3,$4)",
-      [user.id, -plan.price, `⛏ Контракт ${plan.id.toUpperCase()} · ${plan.hashrate} GH/s · ${plan.days}д`, `miner_contract:${tx_hash.slice(0,64)}`]
+      [user.id, -realAmount, `⛏ Контракт ${plan.id.toUpperCase()} · ${plan.hashrate} GH/s · ${plan.days}д`, `miner_contract:${chainHash}`]
     )
 
     await client.query('COMMIT')
@@ -275,7 +331,7 @@ router.post('/buy', async (req, res) => {
     try {
       const bot = getBot()
       if (bot) await bot.sendMessage(ADMIN_TG_ID,
-        `⛏ <b>Новый контракт майнинга</b>\n\n👤 ${user.username?'@'+user.username:user.first_name}\n📋 ${plan.id.toUpperCase()}\n⚡ ${plan.hashrate} GH/s\n📅 ${plan.days} дней\n💰 ${plan.price} TON`,
+        `⛏ <b>Новый контракт майнинга</b>\n\n👤 ${user.username?'@'+user.username:user.first_name}\n📋 ${plan.id.toUpperCase()}\n⚡ ${plan.hashrate} GH/s\n📅 ${plan.days} дней\n💰 ${realAmount} TON ✅ Verified`,
         { parse_mode: 'HTML' })
     } catch {}
 
