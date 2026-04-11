@@ -400,10 +400,24 @@ router.post('/apply', async (req, res) => {
     const check = await checkPost(post_url.trim())
     if (!check.ok) { await client.query('ROLLBACK'); return res.status(400).json({ error: check.error }) }
 
-    const { rows: [p] } = await client.query(
-      'INSERT INTO partnerships (user_id, channel_url, channel_name, post_url, custom_post) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-      [user.id, channel_url.trim(), check.channelName || '', post_url.trim(), custom_post || null]
+    // Check if custom_post column exists
+    const { rows: colCheck } = await client.query(
+      "SELECT 1 FROM information_schema.columns WHERE table_name='partnerships' AND column_name='custom_post'"
     )
+    let p
+    if (colCheck.length > 0 && custom_post) {
+      const { rows: [row] } = await client.query(
+        'INSERT INTO partnerships (user_id, channel_url, channel_name, post_url, custom_post) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+        [user.id, channel_url.trim(), check.channelName || '', post_url.trim(), custom_post]
+      )
+      p = row
+    } else {
+      const { rows: [row] } = await client.query(
+        'INSERT INTO partnerships (user_id, channel_url, channel_name, post_url) VALUES ($1,$2,$3,$4) RETURNING *',
+        [user.id, channel_url.trim(), check.channelName || '', post_url.trim()]
+      )
+      p = row
+    }
 
     await client.query('COMMIT')
 
