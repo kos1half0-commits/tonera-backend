@@ -243,7 +243,13 @@ export async function autoPostPartners() {
       if (subCount >= levelMins[i]) lvlName = levelNames[i]
     }
 
-    // Archive old active promo codes for this channel
+    // Fetch old active promo codes for this channel (to replace in text)
+    const { rows: oldPromos } = await pool.query(
+      "SELECT code FROM promo_codes WHERE channel_name = $1 AND type = 'partner' AND active = true",
+      [channelName]
+    )
+
+    // Archive old active promo codes
     await pool.query(
       "UPDATE promo_codes SET active = false WHERE channel_name = $1 AND type = 'partner' AND active = true",
       [channelName]
@@ -267,7 +273,7 @@ export async function autoPostPartners() {
       console.error(`Promo code gen error for #${p.id}:`, e.message)
     }
 
-    // Build promo text block
+    // Build promo text block for {PROMO} placeholder
     const promoBlock = `\n\n🎁 Промокод: ${code.toUpperCase()}\n💰 Награда: ${reward} TON (${maxUses} активаций)`
 
     const refLink = p.ref_code ? `t.me/${botUsername}?start=${p.ref_code}` : `t.me/${botUsername}`
@@ -275,6 +281,13 @@ export async function autoPostPartners() {
       .replace(/\\n/g, '\n')
       .replace(/\{REF_LINK\}/g, refLink)
       .replace(/\{PROMO\}/g, promoBlock)
+
+    // Replace old hardcoded promo codes in custom post text with new code
+    for (const old of oldPromos) {
+      if (old.code && postText.includes(old.code)) {
+        postText = postText.replace(new RegExp(old.code.replace(/[-]/g, '\\-'), 'gi'), code.toUpperCase())
+      }
+    }
 
     try {
       let msg
