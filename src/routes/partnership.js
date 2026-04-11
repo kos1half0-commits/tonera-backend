@@ -689,7 +689,7 @@ router.post('/check-status/:id', async (req, res) => {
     const bot = getBot()
     const issues = []
 
-    // Check bot as admin
+    // Check bot as admin + posting rights
     try {
       const match = p.channel_url.match(/t\.me\/([^/?]+)/)
       if (match) {
@@ -697,13 +697,22 @@ router.post('/check-status/:id', async (req, res) => {
         const member = await bot.getChatMember('@' + match[1], botInfo.id).catch(() => null)
         if (!member || !['administrator','creator'].includes(member.status)) {
           issues.push('❌ Бот не является администратором канала')
-        } else {
+        } else if (!member.can_post_messages && member.status !== 'creator') {
           issues.push('✅ Бот — администратор канала')
+          issues.push('❌ У бота нет права публикации сообщений')
+        } else {
+          issues.push('✅ Бот — администратор с правом публикации')
         }
 
-        // Check subscriber count
+        // Check subscriber count vs minimum
         const count = await bot.getChatMemberCount('@' + match[1]).catch(() => 0)
-        issues.push(`👥 Подписчиков: ${count}`)
+        const { rows: [minSubsRow] } = await pool.query("SELECT value FROM settings WHERE key='partnership_min_subs'")
+        const minSubs = parseInt(minSubsRow?.value || 1000)
+        if (count < minSubs) {
+          issues.push(`❌ Подписчиков: ${count} (минимум: ${minSubs})`)
+        } else {
+          issues.push(`✅ Подписчиков: ${count.toLocaleString()}`)
+        }
       }
     } catch { issues.push('⚠️ Не удалось проверить канал') }
 
