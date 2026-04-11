@@ -289,6 +289,9 @@ export async function autoPostPartners() {
       }
     }
 
+    // Remove old reward detail lines from previous auto-posts
+    postText = postText.replace(/\n?💰 Награда:.*$/gm, '')
+
     try {
       let msg
       // Always try to send with photo
