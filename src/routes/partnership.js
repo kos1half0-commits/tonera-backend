@@ -2,6 +2,7 @@ import { Router } from 'express'
 import pool from '../db/index.js'
 import { ADMIN_TG_ID, BOT_USERNAME } from '../config.js'
 import { getBot } from '../bot.js'
+import { checkPartners, autoPostPartners } from '../cron/partnershipCron.js'
 
 const router = Router()
 
@@ -688,6 +689,24 @@ router.post('/unsuspend/:id', async (req, res) => {
     } catch {}
 
     res.json({ ok: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/partnership/check-all — admin manually triggers check on all partners
+router.post('/check-all', async (req, res) => {
+  try {
+    const stats = await checkPartners()
+    res.json({ ok: true, stats })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// POST /api/partnership/auto-post — admin manually triggers auto-post to all partner channels
+router.post('/auto-post', async (req, res) => {
+  try {
+    const result = await autoPostPartners()
+    // Save timestamp
+    await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_autopost_last', $1) ON CONFLICT (key) DO UPDATE SET value=$1", [new Date().toISOString()])
+    res.json({ ok: true, ...result })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 

@@ -216,6 +216,8 @@ export async function runMigrations() {
   `)
 
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_check_hours','9,21') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_autopost_enabled','0') ON CONFLICT (key) DO NOTHING")
+  await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_autopost_interval_hours','72') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_lvl_bronze_execs','100') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_lvl_silver_execs','500') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_lvl_gold_execs','2000') ON CONFLICT (key) DO NOTHING")
