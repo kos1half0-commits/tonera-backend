@@ -692,6 +692,17 @@ router.post('/unsuspend/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// POST /api/partnership/toggle-autopost/:id — toggle autopost for a partner
+router.post('/toggle-autopost/:id', async (req, res) => {
+  try {
+    const { rows: [p] } = await pool.query('SELECT id, autopost_enabled FROM partnerships WHERE id=$1', [req.params.id])
+    if (!p) return res.status(404).json({ error: 'Не найдено' })
+    const newVal = !p.autopost_enabled
+    await pool.query('UPDATE partnerships SET autopost_enabled=$1 WHERE id=$2', [newVal, p.id])
+    res.json({ ok: true, autopost_enabled: newVal })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // POST /api/partnership/check-all — admin manually triggers check on all partners
 router.post('/check-all', async (req, res) => {
   try {

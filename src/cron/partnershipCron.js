@@ -209,7 +209,7 @@ export async function autoPostPartners() {
   const { rows: partners } = await pool.query(
     `SELECT p.*, u.telegram_id, u.username, u.first_name, u.ref_code
      FROM partnerships p JOIN users u ON p.user_id = u.id
-     WHERE p.status = 'approved'`
+     WHERE p.status = 'approved' AND p.autopost_enabled = true`
   )
   if (partners.length === 0) return { total: 0, success: 0, failed: 0 }
 
