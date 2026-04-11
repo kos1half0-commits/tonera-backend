@@ -243,10 +243,10 @@ export async function autoPostPartners() {
       if (subCount >= levelMins[i]) lvlName = levelNames[i]
     }
 
-    // Fetch old active promo codes for this channel (to replace in text)
+    // Fetch ALL promo codes for this channel/partner (including archived) to replace in text
     const { rows: oldPromos } = await pool.query(
-      "SELECT code FROM promo_codes WHERE channel_name = $1 AND type = 'partner' AND active = true",
-      [channelName]
+      "SELECT DISTINCT code FROM promo_codes WHERE type = 'partner' AND (channel_name = $1 OR partnership_id = $2 OR partnership_id = -1) ORDER BY code",
+      [channelName, p.id]
     )
 
     // Archive old active promo codes
