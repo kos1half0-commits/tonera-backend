@@ -77,6 +77,28 @@ app.post('/bot/webhook', (req, res) => {
 app.use('/api/channels',  channelsRoutes)
 app.use('/api', telegramAuth)
 
+// === MAINTENANCE MODE — блокирует ВСЕ API (кроме админ-роутов) ===
+let _maintCache = { value: null, ts: 0 }
+app.use('/api', async (req, res, next) => {
+  // Пропускаем админские роуты и settings
+  if (req.path.startsWith('/admin') || req.path.startsWith('/settings')) return next()
+  try {
+    // Кэш на 5 сек чтобы не дёргать БД каждый запрос
+    if (Date.now() - _maintCache.ts > 5000) {
+      const { rows: [m] } = await pool.query("SELECT value FROM settings WHERE key='maintenance'")
+      _maintCache = { value: m?.value, ts: Date.now() }
+    }
+    if (_maintCache.value === '1') {
+      const tgId = req.telegramUser?.id
+      const isAdmin = tgId && String(tgId) === String(process.env.ADMIN_TG_ID)
+      if (!isAdmin) {
+        return res.status(503).json({ error: '🔧 Технические работы. Скоро вернёмся!' })
+      }
+    }
+  } catch {}
+  next()
+})
+
 app.get('/api/settings/:key', async (req, res) => {
   try {
     const { rows: [s] } = await pool.query('SELECT value FROM settings WHERE key=$1', [req.params.key])
