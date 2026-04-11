@@ -175,6 +175,15 @@ router.get('/my', async (req, res) => {
       promoUses: parseInt(cfg[`partner_promo_${l.name.toLowerCase()}_uses`] || '10'),
     }))
 
+    // Autopost timing info
+    const autopostEnabled = cfg['partnership_autopost_enabled'] === '1'
+    const autopostIntervalHours = parseInt(cfg['partnership_autopost_interval_hours'] || '72')
+    const autopostLast = cfg['partnership_autopost_last'] || null
+    let autopostNext = null
+    if (autopostEnabled && autopostLast && autopostIntervalHours > 0) {
+      autopostNext = new Date(new Date(autopostLast).getTime() + autopostIntervalHours * 60 * 60 * 1000).toISOString()
+    }
+
     res.json({
       partnership: p || null,
       referral_count: user.referral_count,
@@ -189,6 +198,7 @@ router.get('/my', async (req, res) => {
       renewsAt,
       default_post: cfg['partnership_default_post'] || null,
       default_post_photo: cfg['partnership_default_post_photo'] || null,
+      autopost: { enabled: autopostEnabled, interval_hours: autopostIntervalHours, last: autopostLast, next: autopostNext },
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
