@@ -187,6 +187,7 @@ router.get('/my', async (req, res) => {
       levels: levelsConfig,
       renewsAt,
       default_post: cfg['partnership_default_post'] || null,
+      default_post_photo: cfg['partnership_default_post_photo'] || null,
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
