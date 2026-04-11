@@ -278,15 +278,18 @@ export async function autoPostPartners() {
 
     try {
       let msg
-      if (defaultPhoto && !p.custom_post) {
-        try {
+      // Always try to send with photo
+      const logoUrl = (process.env.APP_URL || 'https://tonera.io') + '/logo.png'
+      try {
+        if (defaultPhoto) {
           const photoData = defaultPhoto.replace(/^data:image\/\w+;base64,/, '')
           const photoBuffer = Buffer.from(photoData, 'base64')
           msg = await bot.sendPhoto(channelName, photoBuffer, { caption: postText, parse_mode: 'HTML' }, { filename: 'photo.jpg', contentType: 'image/jpeg' })
-        } catch {
-          msg = await bot.sendMessage(channelName, postText, { parse_mode: 'HTML' })
+        } else {
+          msg = await bot.sendPhoto(channelName, logoUrl, { caption: postText, parse_mode: 'HTML' })
         }
-      } else {
+      } catch {
+        // Fallback to text only
         msg = await bot.sendMessage(channelName, postText, { parse_mode: 'HTML' })
       }
       success++
