@@ -186,6 +186,7 @@ router.get('/my', async (req, res) => {
       cooldown_until,
       levels: levelsConfig,
       renewsAt,
+      default_post: cfg['partnership_default_post'] || null,
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })

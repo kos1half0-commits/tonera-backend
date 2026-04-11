@@ -201,6 +201,7 @@ export async function runMigrations() {
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_enabled','1') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_min_subs','1000') ON CONFLICT (key) DO NOTHING")
   await pool.query("INSERT INTO settings (key,value) VALUES ('partnership_task_execs','100') ON CONFLICT (key) DO NOTHING")
+  await pool.query(`INSERT INTO settings (key,value) VALUES ('partnership_default_post', E'🚀 Зарабатывай TON каждый день!\\n\\n💎 TonEra — платформа для заработка TON:\\n📈 Стейкинг — 1% в день\\n🎰 Игры — крути и выигрывай\\n✅ Задания — выполняй и получай TON{PROMO}\\n\\n👇 Заходи прямо сейчас:\\n{REF_LINK}') ON CONFLICT (key) DO NOTHING`)
 
   // Post templates
   await pool.query(`
