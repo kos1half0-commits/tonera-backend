@@ -41,6 +41,28 @@ app.use(express.urlencoded({ extended: true, limit: '100mb' }))
 
 app.get('/health', (_, res) => res.json({ ok: true, bot: BOT_USERNAME }))
 
+// TEMP: migration backup endpoint — secured by secret, remove after migration
+app.get('/migrate-backup', async (req, res) => {
+  const secret = req.query.secret
+  if (secret !== process.env.BOT_TOKEN?.slice(0, 10)) {
+    return res.status(403).json({ error: 'Forbidden' })
+  }
+  try {
+    const { rows: tableList } = await pool.query(
+      "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename"
+    )
+    const backup = { date: new Date().toISOString(), version: 2, tables: {}, summary: {} }
+    for (const { tablename } of tableList) {
+      try {
+        const { rows } = await pool.query(`SELECT * FROM "${tablename}"`)
+        backup.tables[tablename] = rows
+        backup.summary[tablename] = rows.length
+      } catch (e) { console.warn(`Skip ${tablename}:`, e.message) }
+    }
+    res.json(backup)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // Редирект с браузера в Telegram
 app.get('/', (req, res) => {
   const ua = req.headers['user-agent'] || ''
